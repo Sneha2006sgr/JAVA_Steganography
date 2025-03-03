@@ -16,9 +16,6 @@ public class ImageSteganographyGUI {
     private JButton decryptButton;
     private JTextArea decryptedMessageArea;
 
-    // Add a constant for message length storage
-    private static final int MESSAGE_LENGTH_PIXELS = 4; // Store message length in first 4 pixels
-
     public ImageSteganographyGUI() {
         createGUI();
     }
@@ -100,8 +97,8 @@ public class ImageSteganographyGUI {
             try {
                 BufferedImage img = ImageIO.read(new File(inputFile));
 
-                // Check if the image is large enough for the message (including length info)
-                int maxCapacity = (img.getWidth() * img.getHeight() * 3) - (MESSAGE_LENGTH_PIXELS * 3);
+                // Check if the image is large enough for the message
+                int maxCapacity = (img.getWidth() * img.getHeight() * 3) / 8;
                 if (message.length() > maxCapacity) {
                     JOptionPane.showMessageDialog(frame,
                             "Message is too long for this image. Maximum length: " + maxCapacity + " characters.");
@@ -136,28 +133,12 @@ public class ImageSteganographyGUI {
         }
     }
 
+    // Keeps original encryption logic exactly the same for compatibility
     private void hideMessage(BufferedImage img, String message) {
         int width = img.getWidth();
         int height = img.getHeight();
-
-        // First, store the message length in the first few pixels
-        int messageLength = message.length();
-        storeMessageLength(img, messageLength);
-
-        // Start hiding the actual message after the length information
         int n = 0, m = 0, z = 0;
 
-        // Skip the pixels used for length info
-        for (int i = 0; i < MESSAGE_LENGTH_PIXELS; i++) {
-            z = (z + 3) % 3; // Move to next pixel
-            n++;
-            if (n >= width) {
-                n = 0;
-                m++;
-            }
-        }
-
-        // Now hide the actual message
         for (int i = 0; i < message.length(); i++) {
             char c = message.charAt(i);
             int pixelValue = c;
@@ -179,93 +160,77 @@ public class ImageSteganographyGUI {
             pixel = (alpha << 24) | (red << 16) | (green << 8) | blue;
             img.setRGB(n, m, pixel);
 
+            n = (n + 1) % width;
+            m = (m + 1) % height;
             z = (z + 1) % 3;
-            if (z == 0) {
-                n++;
-                if (n >= width) {
-                    n = 0;
-                    m++;
-                    if (m >= height) {
-                        m = 0; // Unlikely to happen, but just in case
-                    }
-                }
-            }
         }
-    }
 
-    private void storeMessageLength(BufferedImage img, int messageLength) {
-        // Store the message length in the first few pixels
-        // We'll use 4 pixels (12 color channels), which is enough for large messages
+        // Add terminator
+        int pixel = img.getRGB(n, m);
+        int alpha = (pixel >> 24) & 0xff;
+        int red = (pixel >> 16) & 0xff;
+        int green = (pixel >> 8) & 0xff;
+        int blue = pixel & 0xff;
 
-        // Convert the length to bytes
-        byte[] lengthBytes = new byte[4];
-        lengthBytes[0] = (byte)((messageLength >> 24) & 0xFF);
-        lengthBytes[1] = (byte)((messageLength >> 16) & 0xFF);
-        lengthBytes[2] = (byte)((messageLength >> 8) & 0xFF);
-        lengthBytes[3] = (byte)(messageLength & 0xFF);
-
-        int n = 0, m = 0, z = 0;
-
-        // Store each byte in a color channel
-        for (int i = 0; i < 4; i++) {
-            int pixel = img.getRGB(n, m);
-            int alpha = (pixel >> 24) & 0xff;
-            int red = (pixel >> 16) & 0xff;
-            int green = (pixel >> 8) & 0xff;
-            int blue = pixel & 0xff;
-
-            // Use the unsigned value of the byte
-            int byteValue = lengthBytes[i] & 0xFF;
-
-            if (z == 0) {
-                red = byteValue;
-            } else if (z == 1) {
-                green = byteValue;
-            } else {
-                blue = byteValue;
-            }
-
-            pixel = (alpha << 24) | (red << 16) | (green << 8) | blue;
-            img.setRGB(n, m, pixel);
-
-            z = (z + 1) % 3;
-            if (z == 0) {
-                n++;
-                if (n >= img.getWidth()) {
-                    n = 0;
-                    m++;
-                }
-            }
+        if (z == 0) {
+            red = 0; // NULL character as terminator
+        } else if (z == 1) {
+            green = 0; // NULL character as terminator
+        } else {
+            blue = 0; // NULL character as terminator
         }
+
+        pixel = (alpha << 24) | (red << 16) | (green << 8) | blue;
+        img.setRGB(n, m, pixel);
     }
 
     private String decryptMessage(BufferedImage img) {
         int width = img.getWidth();
         int height = img.getHeight();
 
-        // First, retrieve the message length
-        int messageLength = retrieveMessageLength(img);
+        // For backward compatibility, try two decryption methods
 
-        // If message length is negative or unreasonably large, it might not be a steganography image
-        if (messageLength < 0 || messageLength > width * height) {
-            return "No hidden message found or the image was not encrypted with this tool.";
+        // First, try original method
+        String original = decryptOriginalMethod(img);
+
+        // If the original method gives a reasonable result, use it
+        if (original != null && !original.isEmpty() && isReadableText(original)) {
+            return original;
         }
 
-        StringBuilder message = new StringBuilder();
-        int n = 0, m = 0, z = 0;
+        // Otherwise, try multiple decryption methods to handle different images
+        String[] attempts = {
+                decryptOriginalMethodWithCleanup(img),
+                decryptFallbackMethod(img)
+        };
 
-        // Skip the pixels used for length info
-        for (int i = 0; i < MESSAGE_LENGTH_PIXELS; i++) {
-            z = (z + 3) % 3; // Move to next pixel
-            n++;
-            if (n >= width) {
-                n = 0;
-                m++;
+        // Return the most readable result
+        String bestResult = "";
+        int bestScore = -1;
+
+        for (String attempt : attempts) {
+            int readabilityScore = getReadabilityScore(attempt);
+            if (readabilityScore > bestScore) {
+                bestScore = readabilityScore;
+                bestResult = attempt;
             }
         }
 
-        // Now extract the actual message
-        for (int i = 0; i < messageLength; i++) {
+        return bestResult;
+    }
+
+    private String decryptOriginalMethod(BufferedImage img) {
+        // This exactly matches your original algorithm
+        int width = img.getWidth();
+        int height = img.getHeight();
+        int n = 0, m = 0, z = 0;
+        StringBuilder message = new StringBuilder();
+
+        // We'll read until we find a terminator or 500 characters max
+        // to avoid infinite loops but still handle most messages
+        for (int i = 0; i < 500; i++) {
+            if (n >= width || m >= height) break;
+
             int pixel = img.getRGB(n, m);
             int alpha = (pixel >> 24) & 0xff;
             int red = (pixel >> 16) & 0xff;
@@ -281,8 +246,58 @@ public class ImageSteganographyGUI {
                 pixelValue = blue;
             }
 
+            // Check for NULL terminator
+            if (pixelValue == 0) {
+                break;
+            }
+
             char c = (char) pixelValue;
             message.append(c);
+
+            n = (n + 1) % width;
+            m = (m + 1) % height;
+            z = (z + 1) % 3;
+        }
+
+        return message.toString();
+    }
+
+    private String decryptOriginalMethodWithCleanup(BufferedImage img) {
+        String raw = decryptOriginalMethod(img);
+        // Remove non-printable characters
+        return raw.replaceAll("[^\\x20-\\x7E]", "");
+    }
+
+    private String decryptFallbackMethod(BufferedImage img) {
+        // Alternative method with different pixel traversal
+        int width = img.getWidth();
+        int height = img.getHeight();
+        int n = 0, m = 0, z = 0;
+        StringBuilder message = new StringBuilder();
+
+        for (int i = 0; i < Math.min(300, width * height); i++) {
+            int pixel = img.getRGB(n, m);
+            int alpha = (pixel >> 24) & 0xff;
+            int red = (pixel >> 16) & 0xff;
+            int green = (pixel >> 8) & 0xff;
+            int blue = pixel & 0xff;
+
+            int pixelValue;
+            if (z == 0) {
+                pixelValue = red;
+            } else if (z == 1) {
+                pixelValue = green;
+            } else {
+                pixelValue = blue;
+            }
+
+            // Only add printable ASCII characters
+            if (pixelValue >= 32 && pixelValue <= 126) {
+                char c = (char) pixelValue;
+                message.append(c);
+            } else if (pixelValue == 0) {
+                break; // Found terminator
+            }
 
             z = (z + 1) % 3;
             if (z == 0) {
@@ -290,9 +305,7 @@ public class ImageSteganographyGUI {
                 if (n >= width) {
                     n = 0;
                     m++;
-                    if (m >= height) {
-                        m = 0; // Unlikely to happen, but just in case
-                    }
+                    if (m >= height) break;
                 }
             }
         }
@@ -300,41 +313,42 @@ public class ImageSteganographyGUI {
         return message.toString();
     }
 
-    private int retrieveMessageLength(BufferedImage img) {
-        // Extract the message length from the first few pixels
-        byte[] lengthBytes = new byte[4];
-        int n = 0, m = 0, z = 0;
+    // Helper method to determine if text is readable
+    private boolean isReadableText(String text) {
+        if (text == null || text.isEmpty()) return false;
 
-        for (int i = 0; i < 4; i++) {
-            int pixel = img.getRGB(n, m);
-            int alpha = (pixel >> 24) & 0xff;
-            int red = (pixel >> 16) & 0xff;
-            int green = (pixel >> 8) & 0xff;
-            int blue = pixel & 0xff;
-
-            if (z == 0) {
-                lengthBytes[i] = (byte) red;
-            } else if (z == 1) {
-                lengthBytes[i] = (byte) green;
-            } else {
-                lengthBytes[i] = (byte) blue;
-            }
-
-            z = (z + 1) % 3;
-            if (z == 0) {
-                n++;
-                if (n >= img.getWidth()) {
-                    n = 0;
-                    m++;
-                }
+        // Check if most characters are printable ASCII
+        int printable = 0;
+        for (char c : text.toCharArray()) {
+            if (c >= 32 && c <= 126) {
+                printable++;
             }
         }
 
-        // Convert bytes back to integer
-        return ((lengthBytes[0] & 0xFF) << 24) |
-                ((lengthBytes[1] & 0xFF) << 16) |
-                ((lengthBytes[2] & 0xFF) << 8) |
-                (lengthBytes[3] & 0xFF);
+        return (double) printable / text.length() > 0.8; // 80% readability threshold
+    }
+
+    // Helper method to score readability
+    private int getReadabilityScore(String text) {
+        if (text == null) return -1;
+
+        int score = 0;
+
+        // More printable characters = better score
+        for (char c : text.toCharArray()) {
+            if (c >= 32 && c <= 126) {
+                score++;
+            } else {
+                score--; // Penalize non-printable characters
+            }
+        }
+
+        // Penalize extremely long outputs as they're likely noise
+        if (text.length() > 200) {
+            score -= (text.length() - 200);
+        }
+
+        return score;
     }
 
     public static void main(String[] args) {

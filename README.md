@@ -1,5 +1,5 @@
 # Image Steganography GUI
-
+Note: The encrypted image is saved inside the folder where the code is present to fetch it directly write the name of the image (eg. "encryptedimmage.jpg") inside text box instead of fetching it.
 ## Overview
 This project is a Java-based Image Steganography application that provides a very simple Graphical User Interface (GUI) to encrypt a secret message into an image and decrypt it later. The application allows users to select an image, input a message, and encode the message into the image or retrieve the hidden message from an already encoded image.
 
